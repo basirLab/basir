@@ -17,8 +17,10 @@ export default async function handler(req) {
   const { question, answer } = await req.json();
 
   const prompt = `
-너는 국제 기준에 따라 사고력을 평가하는 전문가입니다.
-다음은 한 학생의 질문과 답변입니다. 사고력 평가 기준에 따라 각 항목을 0~5점으로 채점하고 이유를 설명해주세요.
+당신은 사고력 평가 전문가입니다.
+다음은 한 학생의 질문과 답변입니다.
+각 항목을 평가한 뒤 반드시 JSON 형식으로만 응답하세요.
+그 외의 말은 절대 하지 마세요.
 
 [질문]
 ${question}
@@ -26,7 +28,7 @@ ${question}
 [학생의 답변]
 ${answer}
 
-평가 항목은 다음과 같습니다:
+평가 항목:
 - CT1: 해석력
 - CT2: 분석력
 - CT3: 평가력
@@ -34,7 +36,7 @@ ${answer}
 - CT5: 설명력
 - CT6: 자기조절력
 
-아래 JSON 형식으로만 응답하세요. 설명은 영어가 아닌 한국어로 하세요.
+아래 JSON 형식으로만 응답하세요. 절대 설명하지 마세요.
 
 {
   "ct_scores": {
@@ -45,16 +47,16 @@ ${answer}
     "CT5": { "score": 숫자, "reason": "이유" },
     "CT6": { "score": 숫자, "reason": "이유" }
   },
-  "model_response": "전체에 대한 종합적 피드백"
+  "model_response": "전체 종합 피드백"
 }
 `;
 
   const completion = await openai.chat.completions.create({
-    model: 'gpt-4o',
+    model: 'gpt-4o', // 또는 'gpt-3.5-turbo'
     messages: [
       {
         role: 'system',
-        content: 'You are a professional critical thinking evaluator who responds only in JSON format.'
+        content: 'JSON only. Respond in pure JSON format. No explanation or introduction.'
       },
       {
         role: 'user',
@@ -66,47 +68,45 @@ ${answer}
   });
 
   let fullText = '';
-  const encoder = new TextEncoder();
+  const stream = completion;
 
+  const encoder = new TextEncoder();
   const readable = new ReadableStream({
     async start(controller) {
-      try {
-        for await (const chunk of streamIterable(completion)) {
-          const lines = chunk
-            .toString()
-            .split('\n')
-            .filter(line => line.trim().startsWith('data:'))
-            .map(line => line.replace(/^data:\s*/, '').trim());
+      for await (const chunk of streamIterable(stream)) {
+        const payloads = chunk
+          .toString()
+          .split('\n')
+          .filter(line => line.trim().startsWith('data:'))
+          .map(line => line.replace('data: ', '').trim());
 
-          for (const line of lines) {
-            if (line === '[DONE]') {
-              try {
-                const parsed = JSON.parse(fullText);
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
-              } catch (err) {
-                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: 'GPT 응답 파싱 실패', raw: fullText })}\n\n`));
-              }
+        for (const payload of payloads) {
+          if (payload === '[DONE]') {
+            try {
+              const result = JSON.parse(fullText);
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(result)}\n\n`));
               controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
               controller.close();
-              return;
-            }
-
-            try {
-              const parsed = JSON.parse(line);
-              const delta = parsed.choices?.[0]?.delta?.content;
-              if (delta) {
-                fullText += delta;
-              }
             } catch (err) {
-              // 무시 가능한 JSON 파싱 오류
-              continue;
+              controller.enqueue(
+                encoder.encode(`data: {"error": "GPT 응답 파싱 실패", "raw": "${fullText.replace(/"/g, "'")}"}\n\n`)
+              );
+              controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+              controller.close();
             }
+            return;
+          }
+
+          try {
+            const parsed = JSON.parse(payload);
+            const content = parsed.choices?.[0]?.delta?.content;
+            if (content) {
+              fullText += content;
+            }
+          } catch (err) {
+            // skip malformed JSON
           }
         }
-      } catch (error) {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: '스트리밍 처리 중 오류 발생', detail: error.message })}\n\n`));
-        controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
-        controller.close();
       }
     }
   });
@@ -119,5 +119,3 @@ ${answer}
     }
   });
 }
-console.log("GPT 응답 원문:", fullText);
-
