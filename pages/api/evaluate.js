@@ -66,41 +66,47 @@ ${answer}
   });
 
   let fullText = '';
-  const stream = completion;
-
   const encoder = new TextEncoder();
+
   const readable = new ReadableStream({
     async start(controller) {
-      for await (const chunk of streamIterable(stream)) {
-        const payloads = chunk
-          .toString()
-          .split('\n')
-          .filter(line => line.trim().startsWith('data:'))
-          .map(line => line.replace('data: ', '').trim());
+      try {
+        for await (const chunk of streamIterable(completion)) {
+          const lines = chunk
+            .toString()
+            .split('\n')
+            .filter(line => line.trim().startsWith('data:'))
+            .map(line => line.replace(/^data:\s*/, '').trim());
 
-        for (const payload of payloads) {
-          if (payload === '[DONE]') {
-            try {
-              const result = JSON.parse(fullText);
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify(result)}\n\n`));
+          for (const line of lines) {
+            if (line === '[DONE]') {
+              try {
+                const parsed = JSON.parse(fullText);
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(parsed)}\n\n`));
+              } catch (err) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: 'GPT 응답 파싱 실패', raw: fullText })}\n\n`));
+              }
               controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
               controller.close();
-            } catch (err) {
-              controller.enqueue(encoder.encode(`data: {"error": "JSON 파싱 실패", "raw": "${fullText.replace(/"/g, "'")}"}\n\n`));
-              controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
-              controller.close();
+              return;
             }
-            return;
-          }
 
-          try {
-            const parsed = JSON.parse(payload);
-            const content = parsed.choices?.[0]?.delta?.content;
-            if (content) fullText += content;
-          } catch (err) {
-            // pass: ignore bad payload
+            try {
+              const parsed = JSON.parse(line);
+              const delta = parsed.choices?.[0]?.delta?.content;
+              if (delta) {
+                fullText += delta;
+              }
+            } catch (err) {
+              // 무시 가능한 JSON 파싱 오류
+              continue;
+            }
           }
         }
+      } catch (error) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ error: '스트리밍 처리 중 오류 발생', detail: error.message })}\n\n`));
+        controller.enqueue(encoder.encode(`data: [DONE]\n\n`));
+        controller.close();
       }
     }
   });
