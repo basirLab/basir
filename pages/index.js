@@ -19,18 +19,18 @@ export default function Home() {
   const [level, setLevel] = useState('');
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState('');
-  const [response, setResponse] = useState('');
+  const [response, setResponse] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const handleLevelSelect = (levelKey) => {
     setLevel(levelKey);
     setQuestion(questionSet[levelKey].question);
     setAnswer('');
-    setResponse('');
+    setResponse(null);
   };
 
   const handleSubmit = async () => {
-    setResponse('');
+    setResponse(null);
     setLoading(true);
 
     const res = await fetch('/api/evaluate', {
@@ -53,12 +53,18 @@ export default function Home() {
         const content = line.replace("data: ", "");
         if (content !== "[DONE]") {
           finalText += content;
-          setResponse(finalText);
         }
       }
     }
 
     setLoading(false);
+
+    try {
+      const evalResult = JSON.parse(finalText);
+      setResponse(evalResult);
+    } catch (e) {
+      setResponse({ error: "GPT 응답 파싱 실패. 내용을 확인하세요.", raw: finalText });
+    }
   };
 
   return (
@@ -105,8 +111,51 @@ export default function Home() {
           </button>
 
           <hr />
-          <h2>📊 GPT 평가 결과</h2>
-          <pre style={{ whiteSpace: 'pre-wrap' }}>{loading ? '⌛ 분석 중...' : response}</pre>
+
+          {loading && <p>⌛ 분석 중입니다... GPT가 평가를 생성 중입니다.</p>}
+
+          {response && !response.error && (
+            <>
+              <h2>📊 항목별 평가 결과</h2>
+              <div>
+                {Object.entries(response.ct_scores).map(([key, val]) => {
+                  if (val.score === "n/a") return null;
+                  return (
+                    <div key={key} style={{
+                      border: '1px solid #ddd',
+                      borderRadius: '8px',
+                      padding: '1rem',
+                      marginBottom: '1rem',
+                      background: '#fefefe'
+                    }}>
+                      <h3>{key.toUpperCase().replace(/_/g, ' ')}</h3>
+                      <p><strong>Score:</strong> {val.score} / 4</p>
+                      <p><strong>Justification:</strong><br />{val.justification}</p>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <h3>🧩 문제점 분석</h3>
+              <p>{response.problem_analysis}</p>
+
+              <h3>🔧 개선 방안</h3>
+              <p>{response.improvement_suggestion}</p>
+
+              <h3>🌟 우수 답변 (Level 4)</h3>
+              <div style={{ background: '#eef9f1', padding: '1rem', borderRadius: '6px' }}>
+                <p>{response.model_response}</p>
+              </div>
+            </>
+          )}
+
+          {response && response.error && (
+            <>
+              <h3 style={{ color: 'red' }}>❌ 오류</h3>
+              <p>{response.error}</p>
+              <pre>{response.raw}</pre>
+            </>
+          )}
         </>
       )}
     </main>
