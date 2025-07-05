@@ -1,35 +1,43 @@
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    res.status(405).json({ error: "Only POST method allowed" });
-    return;
+// pages/api/evaluate.js
+import { OpenAI } from 'openai';
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+export const config = {
+  runtime: 'edge',
+};
+
+export default async function handler(req) {
+  if (req.method !== 'POST') {
+    return new Response('Method Not Allowed', { status: 405 });
   }
 
-  const { question, answer } = req.body;
+  const { question, answer } = await req.json();
 
-  const systemPrompt = `
-You are a critical thinking assessment expert.
+  const prompt = `
+질문: ${question}
+학생의 답변: ${answer}
 
-You must evaluate a student's response using the following 6 CT categories:
+--- 평가 지시 ---
+학생의 답변에 대해 다음 항목을 평가하세요:
 
-CT1: 해석력
-CT2: 분석력
-CT3: 평가력
-CT4: 추론력
-CT5: 설명력
-CT6: 자기조절력
+ct_scores: {
+  ct1_interpretation: { score: 1~4, justification: "" },
+  ct2_analysis: { score: 1~4, justification: "" },
+  ct3_evaluation: { score: 1~4, justification: "" },
+  ct4_inference: { score: 1~4, justification: "" },
+  ct5_explanation: { score: 1~4, justification: "" },
+  ct6_self_regulation: { score: 1~4, justification: "" }
+}
+그리고 문제점과 개선방안, 예시로 4레벨 우수답변도 함께 제공합니다.
 
-You must provide:
-- ct_scores: { CT1: {score, justification}, ..., CT6: {...} }
-- problem_analysis: short diagnosis of student's weakness
-- improvement_suggestion: how to improve the response
-- model_response: a sample level 4 answer
-
-Return only JSON in this format:
+반드시 아래 JSON 형식 그대로만 응답하세요.
 {
   "ct_scores": {
-    "CT1": { "score": 3, "justification": "..." },
+    "ct1_interpretation": { "score": 3, "justification": "..." },
     ...
-    "CT6": { "score": 2, "justification": "..." }
   },
   "problem_analysis": "...",
   "improvement_suggestion": "...",
@@ -37,49 +45,18 @@ Return only JSON in this format:
 }
 `;
 
-  const messages = [
-    { role: "system", content: systemPrompt },
-    {
-      role: "user",
-      content: `Question:\n${question}\n\nAnswer:\n${answer}`,
-    },
-  ];
+  const stream = await openai.chat.completions.create({
+    model: 'gpt-4',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0,
+    stream: true,
+  });
 
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
+  return new Response(stream.toReadableStream(), {
     headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
     },
-    body: JSON.stringify({
-      model: "gpt-4",
-      messages,
-      temperature: 0,
-      stream: true,
-    }),
   });
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache",
-    Connection: "keep-alive",
-  });
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-
-  try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      res.write(chunk);
-    }
-  } catch (err) {
-    console.error("스트리밍 실패:", err);
-    res.write(`data: [ERROR] ${err.message}\n\n`);
-  } finally {
-    res.end();
-  }
 }
