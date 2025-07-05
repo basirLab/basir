@@ -33,37 +33,54 @@ export default function Home() {
     setResponse(null);
     setLoading(true);
 
-    const res = await fetch('/api/evaluate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, answer })
-    });
+    try {
+      const res = await fetch('/api/evaluate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, answer })
+      });
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let finalText = '';
+      if (!res.ok) {
+        const errText = await res.text();
+        throw new Error(`서버 오류: ${errText}`);
+      }
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      const chunk = decoder.decode(value, { stream: true });
-      const lines = chunk.split('\n').filter(line => line.trim().startsWith("data:"));
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let rawText = '';
 
-      for (const line of lines) {
-        const content = line.replace("data: ", "");
-        if (content !== "[DONE]") {
-          finalText += content;
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+
+        const lines = chunk
+          .split('\n')
+          .map(line => line.trim())
+          .filter(line => line.startsWith('data:'));
+
+        for (const line of lines) {
+          const data = line.replace(/^data:\s*/, '');
+          if (data === "[DONE]") continue;
+          rawText += data;
         }
       }
-    }
 
-    setLoading(false);
+      setLoading(false);
 
-    try {
-      const evalResult = JSON.parse(finalText);
-      setResponse(evalResult);
-    } catch (e) {
-      setResponse({ error: "GPT 응답 파싱 실패. 내용을 확인하세요.", raw: finalText });
+      try {
+        const parsed = JSON.parse(rawText);
+        setResponse(parsed);
+      } catch (err) {
+        setResponse({
+          error: 'GPT 응답 파싱 실패. JSON 형식이 아닐 수 있습니다.',
+          raw: rawText
+        });
+      }
+
+    } catch (err) {
+      setLoading(false);
+      setResponse({ error: '요청 실패: ' + err.message });
     }
   };
 
@@ -153,7 +170,7 @@ export default function Home() {
             <>
               <h3 style={{ color: 'red' }}>❌ 오류</h3>
               <p>{response.error}</p>
-              <pre>{response.raw}</pre>
+              {response.raw && <pre>{response.raw}</pre>}
             </>
           )}
         </>
