@@ -1,5 +1,5 @@
 {
   "version": 2,
-  "framework": "nextjs"
+  "framework": "nextjs",
   "root": "basir"
 }
