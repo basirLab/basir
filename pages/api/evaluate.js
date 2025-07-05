@@ -119,3 +119,5 @@ ${answer}
     }
   });
 }
+console.log("GPT 응답 원문:", fullText);
+
